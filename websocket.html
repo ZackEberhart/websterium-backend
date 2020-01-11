@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>WebSocket demo</title>
+        <!-- <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script> -->
+    </head>
+    <body>
+        <script>
+            var ws = new WebSocket('ws://' + document.domain + ':' + location.port + '/game'),
+            turn = 0,
+            query="",
+            func=""
+
+            var messages = document.createElement('ul'),
+            form = document.createElement('form'),
+            userList = document.createElement('ul')
+            form.id = "form"
+            messages.id = "messages"
+            userList.id = "userList"
+
+            document.body.appendChild(messages);
+            document.body.appendChild(userList);
+            document.body.appendChild(form);
+
+            prepareForm = async function(){
+                var form = document.getElementsByTagName('form')[0]
+                var ghost_button = document.createElement('button');
+                ghost_button.setAttribute("onclick", "send('setRole', 'ghost')");
+                ghost_button.setAttribute("type", "button");
+                ghost_button.innerHTML = 'Ghost';
+                form.appendChild(ghost_button);
+                var psychic_button = document.createElement('button');
+                psychic_button.setAttribute("onclick", "send('setRole', 'psychic')");
+                psychic_button.setAttribute("type", "button");
+                psychic_button.innerHTML = 'Psychic';
+                form.appendChild(psychic_button);
+                var start_button = document.createElement('button');
+                start_button.setAttribute("onclick", "send('startGame', 'start')");
+                start_button.setAttribute("type", "button");
+                start_button.innerHTML = 'Start';
+                form.appendChild(start_button);
+                var send_button = document.createElement('button');
+                send_button.setAttribute("onclick", "send('getDreams', 'AAAAAAAA')");
+                send_button.setAttribute("type", "button");
+                send_button.innerHTML = 'Get Dreams';
+                form.appendChild(send_button);
+                var send_button = document.createElement('button');
+                send_button.setAttribute("onclick", "send('makeGuess', 'AAAAAAAA')");
+                send_button.setAttribute("type", "button");
+                send_button.innerHTML = 'Make guess';
+                form.appendChild(send_button);
+            }
+
+            send = function(mtype, data){
+                var message = JSON.stringify({"type": mtype, "message": data});
+                ws.send(message);
+                return false
+            }
+
+            makeMessage = function(name, text, color){
+                var messages = document.getElementsByTagName('ul')[0],
+                message = document.createElement('li'),
+                sender = document.createElement("span");
+                sender.appendChild(document.createTextNode(name))
+                message.appendChild(sender);
+                message.appendChild(document.createElement('br'));
+                message.appendChild(document.createTextNode(text));
+                messages.insertBefore(message, messages.childNodes[0]);
+            }
+
+            showUserList = function(data){
+                var userList = document.getElementById("userList"),
+                message = data['message']
+                userList.innerHTML = ""
+                for(key in message){
+                    role = message[key] ? message[key] : "None"
+                    user = document.createElement('li');
+                    user.appendChild(document.createTextNode(key + ": " + role))
+                    userList.appendChild(user)
+                }
+            }
+
+            startGame = function(data){
+                document.body.innerHTML = ""
+                var words = document.createTextNode("Game tiem")
+                document.body.appendChild(words)
+                var cards = data['message']
+                console.log(data)
+                for(stage in cards){
+                    console.log(cards[stage])
+                }
+                var hand = document.createElement("ul")
+                hand.id = "hand"
+                document.body.appendChild(hand)
+            }
+
+            updateState = function(data){
+                if(window.client_id !="ghost"){
+                    var hand = data['message']['psychics'][window.client_id]['hand']
+                    setHand(hand)
+                }
+            }
+
+            handleRejection = function(data){
+
+            }
+
+            setHand = function(data){
+                var hand = document.getElementById("hand")
+                for(const card of data){
+                    e = document.createElement("li")
+                    e.innerHTML = card
+                    hand.appendChild(e)
+                }
+                console.log(data)
+            }
+
+            ws.onmessage = function (event) {
+                var data = JSON.parse(event.data)
+                if(data["type"] == "user_list"){
+                    showUserList(data)
+                }else if(data['type'] == "start"){
+                    startGame(data)
+                }else if(data['type'] == "state"){
+                    updateState(data)
+                }else if(data['type'] == "reject"){
+                    handRejection(data)
+                }else if(data['type'] == "client_id"){
+                    window.client_id = data['message']
+                }else if(data['type'] == "ghost_hand" && window.client_id == "ghost"){
+                    setHand(data['message'])
+                }else{
+                    text=data["message"]
+                }
+                // makeMessage("System", text , "purple")
+            };
+
+            prepareForm();
+
+        </script>
+        <!-- <button type="button" onclick="send()"> Send</button> -->
+    </body>
+</html>
