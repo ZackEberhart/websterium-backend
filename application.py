@@ -119,7 +119,7 @@ class Game:
 
     def doneGuessing(self):
         for psychic in self.psychics:
-            if not psychic.current_guess: return False
+            if psychic.current_guess==None: return False
         return True
     
     @property
