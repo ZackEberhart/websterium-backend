@@ -212,8 +212,8 @@ class Room:
             await self.sendClientIds()
             await self.broadcast("image_links", await self.getImageLinks(data["message"], self.game.cards))
             await self.broadcast("stories", self.game.stories)
-            await self.broadcast("start", self.game.cards)
             await self.broadcast("state", self.game.state)
+            await self.broadcast("start", self.game.cards)
             await self.ghost.send(self.makeData("ghost_hand", self.game.ghost.hand))
         else:
             data = self.makeData("reject", "Need a ghost and psychic")
