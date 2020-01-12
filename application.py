@@ -211,8 +211,8 @@ class Room:
             self.game = Game(self.num_psychics, album_lengths)
             await self.sendClientIds()
             await self.broadcast("image_links", await self.getImageLinks(data["message"], self.game.cards))
-            await self.broadcast("start", self.game.cards)
             await self.broadcast("stories", self.game.stories)
+            await self.broadcast("start", self.game.cards)
             await self.broadcast("state", self.game.state)
             await self.ghost.send(self.makeData("ghost_hand", self.game.ghost.hand))
         else:
