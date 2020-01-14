@@ -58,6 +58,7 @@ class Game:
 
     ghost = None
     psychics = None
+    current_round = None
     
     def __init__(self, num_psychics, album_lengths):
         self.dreamsrc, self.suspectsrc, self.placesrc, self.thingsrc  = [list(range(album_len)) for album_len in album_lengths]
@@ -71,6 +72,7 @@ class Game:
 
         self.ghost = Ghost()
         self.psychics = [Psychic(i) for i in range(num_psychics)]
+        self.current_round = 1
 
         random.shuffle(self.dreamsrc)
         self.drawDreams()
@@ -106,12 +108,10 @@ class Game:
                 psychic.guesses.append(psychic.current_guess)
             psychic.current_guess = None
         self.ghost.psychics_clued = []
+        self.current_round+=1
 
     def checkGuess(self, pid, guess):
         return self.stories[pid][self.psychics[pid].stage] == guess
-
-    def currentRound(self, pid):
-        return self.psychics[pid].stage
 
     def advanceRound(self, pid):
         self.psychics[pid].stage += 1
@@ -129,6 +129,7 @@ class Game:
         for i, psychic in enumerate(self.psychics):
             state["psychics"][i] = psychic.summarizeSelf()
         state["ghost"] = self.ghost.summarizeSelf()
+        state["current_round"] = self.current_round
         return state
 
     @property
