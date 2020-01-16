@@ -63,6 +63,7 @@ class Game:
     
     def __init__(self, num_psychics, album_lengths):
         self.dreamsrc, self.suspectsrc, self.placesrc, self.thingsrc  = [list(range(album_len)) for album_len in album_lengths]
+        self.discard = []
         self.suspects = random.sample(self.suspectsrc, num_psychics+3)
         self.places = random.sample(self.placesrc, num_psychics+3)
         self.things = random.sample(self.thingsrc, num_psychics+3)
@@ -81,7 +82,13 @@ class Game:
 
     def drawDreams(self):
         while len(self.ghost.hand) < 7:
-            self.ghost.hand.append(self.dreamsrc.pop())
+            if(len(self.dreamsrc)==0):
+                random.shuffle(self.discard)
+                self.dreamsrc = self.discard
+                self.discard = []
+            card = self.dreamsrc.pop()
+            self.ghost.hand.append(card)
+            self.discard.append(card)
 
     def sendDreams(self, pid, dreams):
         if len(dreams) > len(self.ghost.hand): return False
@@ -179,6 +186,7 @@ class Room:
         '''
         self.clients_list.append(client)
         self.usernames[client] = username
+        self.psychics.append(client)
         data = self.makeData("join", self.roomname)
         await client.send(data)
         await self.broadcast("user_list", self._userList())
@@ -230,12 +238,21 @@ class Room:
             Calls functions to start the first turn
             If no ghost or too few psychics, sends an error msg
         '''
-        
+        try:
+            album_lengths = [len(self.im.get_album(src).images) for src in data["message"]]
+        except:
+            data = self.makeData("reject", "Make sure the Imgur album IDs are valid")
+            await client.send(data)
+            return
+        for album_length in album_lengths:
+            if(album_length < len(self.psychics) + 3):
+                data = self.makeData("reject", "Make sure the Imgur albums have enough images (number of psychics + 3)")
+                await client.send(data)
+                return
         if(len(self.psychics)<len(self.clients_list)-1):
             data = self.makeData("reject", "All users must pick a role")
             await client.send(data)
         elif(self.ghost and len(self.psychics)>0):
-            album_lengths = [len(self.im.get_album(src).images) for src in data["message"]]
             self.game = Game(self.num_psychics, album_lengths)
             await self.sendClientIds()
             await self.broadcast("image_links", await self.getImageLinks(data["message"], self.game.cards))
