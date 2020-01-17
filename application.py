@@ -211,7 +211,8 @@ class Room:
             "setRole": self.setRole,
             "startGame": self.startGame,
             "sendDreams": self.sendDreams,
-            "makeGuess": self.makeGuess
+            "makeGuess": self.makeGuess,
+            "chatMessage": self.handleChatMessage
         }
         d_type = data["type"]
         if d_type in options: await options[d_type](client, data)
@@ -238,6 +239,14 @@ class Room:
             Calls functions to start the first turn
             If no ghost or too few psychics, sends an error msg
         '''
+        if(len(self.psychics)<len(self.clients_list)-1):
+            data = self.makeData("reject", "All users must pick a role")
+            await client.send(data)
+            return
+        if(self.ghost==None or  len(self.psychics)==0):
+            data = self.makeData("reject", "Need a ghost and psychic")
+            await client.send(data)
+            return
         try:
             album_lengths = [len(self.im.get_album(src).images) for src in data["message"]]
         except:
@@ -249,20 +258,14 @@ class Room:
                 data = self.makeData("reject", "Make sure the Imgur albums have enough images (number of psychics + 3)")
                 await client.send(data)
                 return
-        if(len(self.psychics)<len(self.clients_list)-1):
-            data = self.makeData("reject", "All users must pick a role")
-            await client.send(data)
-        elif(self.ghost and len(self.psychics)>0):
-            self.game = Game(self.num_psychics, album_lengths)
-            await self.sendClientIds()
-            await self.broadcast("image_links", await self.getImageLinks(data["message"], self.game.cards))
-            await self.broadcast("stories", self.game.stories)
-            await self.broadcast("state", self.game.state)
-            await self.broadcast("start", self.game.cards)
-            await self.ghost.send(self.makeData("ghost_hand", self.game.ghost.hand))
-        else:
-            data = self.makeData("reject", "Need a ghost and psychic")
-            await client.send(data)
+        self.game = Game(self.num_psychics, album_lengths)
+        await self.sendClientIds()
+        await self.broadcast("image_links", await self.getImageLinks(data["message"], self.game.cards))
+        await self.broadcast("stories", self.game.stories)
+        await self.broadcast("state", self.game.state)
+        await self.broadcast("start", self.game.cards)
+        await self.ghost.send(self.makeData("ghost_hand", self.game.ghost.hand))
+        
 
     async def getImageLinks(self, album_sources, cards):
         imageLinks = {}
@@ -302,6 +305,16 @@ class Room:
             await self.broadcast("state", self.game.state)
         else:
             await client.send(self.makeData("reject", "invalid action")) 
+
+    async def handleChatMessage(self, client, data):
+        ''' Callback when user sends "setRole" message
+            Sets self.ghost to client or adds client to self.psychics
+            Broadcasts updated user list
+        '''
+        message = data["message"]["text"]
+        user = self.usernames[client]
+        chat_message = {"text": message, "user": user}
+        await self.broadcast("chat_message", chat_message)
 
     def makeData(self, d_type, message=""):
         ''' Returns a json message with type and message '''
