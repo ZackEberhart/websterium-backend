@@ -55,6 +55,7 @@ class Game:
     places=None
     things=None
     stories = None
+    ravens = None
 
     ghost = None
     psychics = None
@@ -76,12 +77,13 @@ class Game:
         self.psychics = [Psychic(i) for i in range(num_psychics)]
         self.current_round = 1
         self.status = "ongoing"
+        self.ravens = 3
 
         random.shuffle(self.dreamsrc)
         self.drawDreams()
 
     def drawDreams(self):
-        while len(self.ghost.hand) < 7:
+        while len(self.ghost.hand) < 8:
             if(len(self.dreamsrc)==0):
                 random.shuffle(self.discard)
                 self.dreamsrc = self.discard
@@ -97,6 +99,14 @@ class Game:
             self.psychics[pid].hand.append(dream)
             self.ghost.hand.remove(dream)
         self.ghost.psychics_clued.append(pid)
+        self.drawDreams()
+        return True
+
+    def useRaven(self, dreams):
+        # dreams = [self.ghost.hand[dream_index] for dream_index in dreams]
+        for dream in dreams:
+            self.ghost.hand.remove(dream)
+        self.ravens -= 1
         self.drawDreams()
         return True
 
@@ -152,6 +162,7 @@ class Game:
         state["ghost"] = self.ghost.summarizeSelf()
         state["current_round"] = self.current_round
         state["status"] = self.status
+        state["ravens"] = self.ravens
         return state
 
     @property
@@ -184,9 +195,11 @@ class Room:
             Creates a unique ID for that user and associates it with the client
             Sends a welcome msg w/ id to that user and broadcasts the updated user_list
         '''
-        self.clients_list.append(client)
+        if client not in self.clients_list:
+            self.clients_list.append(client)
         self.usernames[client] = username
-        self.psychics.append(client)
+        if self.ghost != client and client not in self.psychics:
+            self.psychics.append(client)
         data = self.makeData("join", self.roomname)
         await client.send(data)
         await self.broadcast("user_list", self._userList())
@@ -212,7 +225,8 @@ class Room:
             "startGame": self.startGame,
             "sendDreams": self.sendDreams,
             "makeGuess": self.makeGuess,
-            "chatMessage": self.handleChatMessage
+            "chatMessage": self.handleChatMessage,
+            "useRaven": self.useRaven
         }
         d_type = data["type"]
         if d_type in options: await options[d_type](client, data)
@@ -292,6 +306,19 @@ class Room:
         else:
             await client.send(self.makeData("reject", "invalid action"))  
 
+    async def useRaven(self, client, data):
+        ''' Callback when ghost user sends a "sendDreams" message
+            Updates the game state and broadcasts to all users
+            Message includes users awaiting dreams - if empty, ghost can't send more
+            If user newly dream'd, they can now make a guess
+        '''
+        dreams = data["message"]["dreams"]
+        if self.game.useRaven(dreams):
+            await self.broadcast("state", self.game.state)
+            await self.ghost.send(self.makeData("ghost_hand", self.game.ghost.hand))
+        else:
+            await client.send(self.makeData("reject", "invalid action"))  
+
     async def makeGuess(self, client, data):
         ''' Callback when psychic user sends a "makeGuess" message
             Updates the game state and broadcasts to all users
@@ -313,7 +340,8 @@ class Room:
         '''
         message = data["message"]["text"]
         user = self.usernames[client]
-        chat_message = {"text": message, "user": user}
+        is_ghost = client==self.ghost
+        chat_message = {"text": message, "user": user, "ghost":is_ghost}
         await self.broadcast("chat_message", chat_message)
 
     def makeData(self, d_type, message=""):
@@ -383,12 +411,13 @@ async def feed(request, ws):
     while True:
         try:
             data = await ws.recv()
-            print(data)
         except Exception as e:
-            await rooms[all_clients[ws]].leave(ws)
-            if rooms[all_clients[ws]].empty:
-                del rooms[all_clients[ws]]
-            del all_clients[ws]
+            if ws in all_clients and all_clients[ws]:
+                if all_clients[ws] in rooms:
+                    await rooms[all_clients[ws]].leave(ws)
+                    if rooms[all_clients[ws]].empty:
+                        del rooms[all_clients[ws]]
+                del all_clients[ws]
             break
         else: 
             data = js.loads(data)  
@@ -410,7 +439,8 @@ async def feed(request, ws):
                     del rooms[all_clients[ws]]
                 del all_clients[ws]
             else:
-                await rooms[all_clients[ws]].handleData(ws, data)
+                if ws in all_clients and all_clients[ws] in rooms:
+                    await rooms[all_clients[ws]].handleData(ws, data)
 
 if __name__ == '__main__':
     application.run(host="0.0.0.0", 
