@@ -404,7 +404,7 @@ all_clients = {}
 
 @application.route('/')
 async def index(request):
-    return await file('websocket.html')
+    return await file('build/index.html')
 
 @application.websocket('/game')
 async def feed(request, ws):
