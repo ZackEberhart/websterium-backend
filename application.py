@@ -7,6 +7,7 @@ import sys
 import random
 import pyimgur
 import os
+import time
 
 application = Sanic("mysterium-backend")
 
@@ -33,7 +34,6 @@ class Psychic:
     story = None
 
     def __init__(self, pid):
-        self.pid = pid
         self.stage = 0
         self.hand = []
         self.current_guess = None
@@ -117,8 +117,8 @@ class Game:
         return True
 
     def evaluateGuesses(self):
-        for psychic in self.psychics:
-            if self.checkGuess(psychic.pid, psychic.current_guess): 
+        for pid, psychic in enumerate(self.psychics):
+            if self.checkGuess(pid, psychic.current_guess): 
                 psychic.guesses = []
                 psychic.stage += 1
                 psychic.hand = []
@@ -132,6 +132,11 @@ class Game:
             self.status = "won"
         elif(self.current_round > 7):
             self.status = "lost"
+            for pid, psychic in enumerate(self.psychics):
+                psychic.guesses = []
+                psychic.stage = 4
+                psychic.hand = []
+                psychic.story = self.stories[pid]
 
     def isGameWon(self):
         for psychic in self.psychics:
@@ -139,6 +144,8 @@ class Game:
                 return False
         return True
 
+    def isGameOver(self):
+        return self.status != "ongoing"
 
     def checkGuess(self, pid, guess):
         if self.psychics[pid].stage > 2: return False
@@ -152,6 +159,12 @@ class Game:
         for psychic in self.psychics:
             if psychic.stage <=2 and psychic.current_guess==None: return False
         return True
+
+    def removePsychic(self, pid):
+        self.psychics.pop(pid)
+        self.stories.pop(pid)
+        '''If a psychic leaves midgame, adjust the game so that the rest can continue.'''
+
     
     @property
     def state(self):
@@ -202,19 +215,36 @@ class Room:
             self.psychics.append(client)
         data = self.makeData("join", self.roomname)
         await client.send(data)
+        await self.systemMessage(self.usernames[client] + " has joined.")
         await self.broadcast("user_list", self._userList())
+        await self.sendClientIds()
 
     async def leave(self, client):
         ''' Called when the connection w/ a client breaks
             Removes the client from the clients_list
             Sets the ghost to None or remove client from psychics list
             Broadcasts the updated user_list
+            If there are no more clients or the ghost leaves, end the game.
         '''
+        await self.systemMessage(self.usernames[client] + " has disconnected.")
         if client in self.clients_list: self.clients_list.remove(client)
-        if self.ghost == client: self.ghost = None
-        if client in self.psychics: self.psychics.remove(client)
+        if client in self.usernames: self.usernames.pop(client)
+        if self.ghost == client: 
+            self.ghost = None
+        elif client in self.psychics: 
+            if self.game:
+                self.game.removePsychic(self.psychics.index(client))
+            self.psychics.remove(client)
+        if self.game:
+            if len(self.psychics) == 0 or self.ghost == None:
+                self.game = None
+                await self.broadcast("game_interrupted")
         await self.broadcast("user_list", self._userList())
-        self.game = None
+        await self.sendClientIds()
+        if self.game:
+            await self.broadcast("state", self.game.state)
+            await self.broadcast("stories", self.game.stories)
+        
 
     async def handleData(self, client, data):
         ''' Called whenever any user sends a message
@@ -246,6 +276,7 @@ class Room:
             if self.ghost == client: self.ghost = None
             if client not in self.psychics: self.psychics.append(client)
         await self.broadcast("user_list", self._userList())
+        await self.sendClientIds()
 
     async def startGame(self, client, data):
         ''' Callback when user sends "startGame" message
@@ -253,6 +284,7 @@ class Room:
             Calls functions to start the first turn
             If no ghost or too few psychics, sends an error msg
         '''
+        #Check that there are enough players
         if(len(self.psychics)<len(self.clients_list)-1):
             data = self.makeData("reject", "All users must pick a role")
             await client.send(data)
@@ -261,33 +293,49 @@ class Room:
             data = self.makeData("reject", "Need a ghost and psychic")
             await client.send(data)
             return
+        #Send loading message
+        await self.broadcast("loading", True)
+        await asyncio.sleep(.1)
+        #Check album IDs and lengths
         try:
             album_lengths = [len(self.im.get_album(src).images) for src in data["message"]]
         except:
             data = self.makeData("reject", "Make sure the Imgur album IDs are valid")
             await client.send(data)
+            await self.broadcast("loading", False)
             return
         for album_length in album_lengths:
             if(album_length < len(self.psychics) + 3):
                 data = self.makeData("reject", "Make sure the Imgur albums have enough images (number of psychics + 3)")
                 await client.send(data)
+                await self.broadcast("loading", False)
                 return
-        self.game = Game(self.num_psychics, album_lengths)
+        #Start game
+        await self.broadcast("user_list", self._userList())
         await self.sendClientIds()
+        self.game = Game(self.num_psychics, album_lengths)
         await self.broadcast("image_links", await self.getImageLinks(data["message"], self.game.cards))
         await self.broadcast("stories", self.game.stories)
         await self.broadcast("state", self.game.state)
         await self.broadcast("start", self.game.cards)
+        await self.broadcast("loading", False)
+        await self.systemMessage("Game started.")
         await self.ghost.send(self.makeData("ghost_hand", self.game.ghost.hand))
         
 
     async def getImageLinks(self, album_sources, cards):
+        def fix_links(link):
+            url, extension = link.rsplit(".", 1)
+            # if extension not in ["gif", "png", "jpg", "jpeg"]:
+            #     extension = ".gif"
+            # url += "_d"
+            return url + "." + extension
         imageLinks = {}
         albums = [self.im.get_album(src) for src in album_sources]
-        imageLinks['dreams'] = {i: image.link for i, image in enumerate(albums[0].images)}
-        suspectLinks= {i: albums[1].images[i].link for i in cards['suspects']}
-        placeLinks = {i: albums[2].images[i].link for i in cards['places']}
-        thingLinks= {i: albums[3].images[i].link for i in cards['things']}
+        imageLinks['dreams'] = {i: fix_links(image.link) for i, image in enumerate(albums[0].images)}
+        suspectLinks= {i: fix_links(albums[1].images[i].link) for i in cards['suspects']}
+        placeLinks = {i: fix_links(albums[2].images[i].link) for i in cards['places']}
+        thingLinks= {i: fix_links(albums[3].images[i].link) for i in cards['things']}
         cardLinks = [suspectLinks, placeLinks, thingLinks]
         imageLinks['cards'] = cardLinks
         return imageLinks
@@ -300,22 +348,21 @@ class Room:
         '''
         psychic = data["message"]["psychic"]
         dreams = data["message"]["dreams"]
-        if self.game.sendDreams(psychic, dreams):
+        if self.game and self.game.sendDreams(psychic, dreams):
             await self.broadcast("state", self.game.state)
             await self.ghost.send(self.makeData("ghost_hand", self.game.ghost.hand))
         else:
             await client.send(self.makeData("reject", "invalid action"))  
 
     async def useRaven(self, client, data):
-        ''' Callback when ghost user sends a "sendDreams" message
-            Updates the game state and broadcasts to all users
-            Message includes users awaiting dreams - if empty, ghost can't send more
-            If user newly dream'd, they can now make a guess
+        ''' Callback when ghost user sends a "useRaven" message
+            If there are raven uses remaining (there should be), ghost will have designated dreams replaced
         '''
         dreams = data["message"]["dreams"]
-        if self.game.useRaven(dreams):
+        if self.game and self.game.useRaven(dreams):
             await self.broadcast("state", self.game.state)
             await self.ghost.send(self.makeData("ghost_hand", self.game.ghost.hand))
+            await self.systemMessage("CAW CAW! (%i raven(s) remaining)"%(self.game.ravens))
         else:
             await client.send(self.makeData("reject", "invalid action"))  
 
@@ -326,10 +373,12 @@ class Room:
         '''
         psychic = self.psychics.index(client)
         guess = data["message"]["guess"]
-        if self.game.makeGuess(psychic, guess):
+        if self.game and self.game.makeGuess(psychic, guess):
             if self.game.doneGuessing():
                 self.game.evaluateGuesses()
             await self.broadcast("state", self.game.state)
+            if self.game.isGameOver():
+                self.game = None
         else:
             await client.send(self.makeData("reject", "invalid action")) 
 
@@ -340,9 +389,15 @@ class Room:
         '''
         message = data["message"]["text"]
         user = self.usernames[client]
-        is_ghost = client==self.ghost
-        chat_message = {"text": message, "user": user, "ghost":is_ghost}
+        m_type = "ghost" if client==self.ghost else "psychic"
+        chat_message = {"text": message, "user": user, "type":m_type}
         await self.broadcast("chat_message", chat_message)
+
+    async def systemMessage(self, message):
+        '''Broadcasts a message from the system to indicate game status'''
+        chat_message = {"text": message, "user": "System", "type":"system"}
+        await self.broadcast("chat_message", chat_message)
+
 
     def makeData(self, d_type, message=""):
         ''' Returns a json message with type and message '''
@@ -350,18 +405,13 @@ class Room:
 
     async def sendClientIds(self):
         for i, psychic in enumerate(self.psychics):
-            try:
-                data_out = self.makeData("client_id", i)
-                await psychic.send(data_out)
-            except:
-                await self.leave(psychic)
-        try:
+            data_out = self.makeData("client_id", i)
+            await psychic.send(data_out)
+        if self.ghost:
             data_out = self.makeData("client_id", "ghost")
             await self.ghost.send(data_out)
-        except:
-            await self.leave(self.ghost)
 
-    async def broadcast(self, d_type, data, psychics=False):
+    async def broadcast(self, d_type, data = {}, psychics=False):
         ''' Sends a message to all users in the room
             Can choose to exclude the ghost using the "psychics" argument
         '''
@@ -371,7 +421,8 @@ class Room:
                 data_out = self.makeData(d_type, data)
                 await receiver.send(data_out)
             except:
-                await self.leave(receiver)
+                pass
+            #     await self.leave(receiver)
 
     
     def _userList(self):
@@ -422,7 +473,7 @@ async def feed(request, ws):
         else: 
             data = js.loads(data)  
             if data['type'] == "join":
-                if data["message"]["roomname"] in rooms and rooms[data["message"]["roomname"]].game != None:
+                if data["message"]["roomname"] in rooms and rooms[data["message"]["roomname"]].game != None and rooms[data["message"]["roomname"]].game.status == "ongoing":
                     await ws.send(js.dumps({"type": "reject", "message": "The game has already started"}))
                 elif data["message"]["roomname"] in rooms and rooms[data["message"]["roomname"]].num_psychics >=6:
                     await ws.send(js.dumps({"type": "reject", "message": "Room full"}))
@@ -433,7 +484,7 @@ async def feed(request, ws):
                         rooms[data["message"]["roomname"]] = Room(data["message"]["roomname"])
                     all_clients[ws] = data['message']["roomname"]
                     await rooms[data["message"]["roomname"]].join(ws, data["message"]["username"])
-            elif data['type'] == "leave":
+            elif data['type'] == " ":
                 await rooms[all_clients[ws]].leave(ws)
                 if rooms[all_clients[ws]].empty:
                     del rooms[all_clients[ws]]
