@@ -5,6 +5,7 @@ from sanic.response import json, text
 import json as js
 import sys
 import random
+import string
 import pyimgur
 import os
 import time
@@ -405,10 +406,10 @@ class Room:
 
     async def sendClientIds(self):
         for i, psychic in enumerate(self.psychics):
-            data_out = self.makeData("client_id", i)
+            data_out = self.makeData("client_id", {"id": i, "host":self.clients_list[0] == psychic})
             await psychic.send(data_out)
         if self.ghost:
-            data_out = self.makeData("client_id", "ghost")
+            data_out = self.makeData("client_id", {"id": "ghost", "host":self.clients_list[0] == self.ghost})
             await self.ghost.send(data_out)
 
     async def broadcast(self, d_type, data = {}, psychics=False):
@@ -424,6 +425,12 @@ class Room:
                 pass
             #     await self.leave(receiver)
 
+    def summarizeSelf(self):
+        return({
+            "roomname": self.roomname,
+            "status": self._gameStatus(),
+            "players": len(self.psychics) if not self.ghost else len(self.psychics)+1
+        })
     
     def _userList(self):
         ''' Returns a list of each user along with their role (psychic, ghost, other) '''
@@ -436,6 +443,12 @@ class Room:
             else:
                 user_list[i] = {'name': self.usernames[client], "role": "", "pid": -1}
         return user_list
+
+    def _gameStatus(self):
+        if self.game:
+            return "Ongoing"
+        else:
+            return "In Lobby"
 
     @property
     def full(self):
@@ -452,6 +465,26 @@ class Room:
 
 rooms = {}
 all_clients = {}
+
+def createRoom(ws, roomname=""):
+    while(roomname in rooms or len(roomname)==0):
+        roomname = ''.join(random.choice(string.ascii_lowercase+string.digits) for i in range(10))
+    rooms[roomname] = Room(roomname)
+    return roomname
+
+async def joinRoom(ws, roomname, username):
+    if roomname in rooms and rooms[roomname].game != None and rooms[roomname].game.status == "ongoing":
+        await ws.send(js.dumps({"type": "reject", "message": "The game has already started."}))
+    elif roomname in rooms and rooms[roomname].num_psychics >=6:
+        await ws.send(js.dumps({"type": "reject", "message": "Room full."}))
+    elif len(roomname) == 0 or len(username)==0:
+        await ws.send(js.dumps({"type": "reject", "message": "Please choose a username and room name."}))
+    else:
+        if roomname not in rooms: 
+            await ws.send(js.dumps({"type": "reject", "message": "Room specified does not exist."}))
+        else:
+            all_clients[ws] = roomname
+            await rooms[roomname].join(ws, username)
 
 @application.route('/')
 async def index(request):
@@ -472,23 +505,24 @@ async def feed(request, ws):
             break
         else: 
             data = js.loads(data)  
-            if data['type'] == "join":
-                if data["message"]["roomname"] in rooms and rooms[data["message"]["roomname"]].game != None and rooms[data["message"]["roomname"]].game.status == "ongoing":
-                    await ws.send(js.dumps({"type": "reject", "message": "The game has already started"}))
-                elif data["message"]["roomname"] in rooms and rooms[data["message"]["roomname"]].num_psychics >=6:
-                    await ws.send(js.dumps({"type": "reject", "message": "Room full"}))
-                elif len(data["message"]["roomname"]) == 0 or len(data["message"]["username"])==0:
-                    await ws.send(js.dumps({"type": "reject", "message": "Please choose a username and room name"}))
+            if data['type'] == "get_rooms":
+                await ws.send(js.dumps({"type": "rooms", "message": [rooms[room].summarizeSelf() for room in rooms]}))
+            elif data['type'] == "create":
+                roomname = data["message"]["roomname"]
+                if roomname in rooms:
+                    await ws.send(js.dumps({"type": "reject", "message": "Room already exists."}))
                 else:
-                    if data["message"]["roomname"] not in rooms: 
-                        rooms[data["message"]["roomname"]] = Room(data["message"]["roomname"])
-                    all_clients[ws] = data['message']["roomname"]
-                    await rooms[data["message"]["roomname"]].join(ws, data["message"]["username"])
+                    roomname = createRoom(ws, roomname)
+                    await joinRoom(ws, roomname, data["message"]["username"])
+            elif data['type'] == "join":
+                roomname = data["message"]["roomname"]
+                await joinRoom(ws, roomname, data["message"]["username"])
             elif data['type'] == "leave":
-                await rooms[all_clients[ws]].leave(ws)
-                if rooms[all_clients[ws]].empty:
-                    del rooms[all_clients[ws]]
-                del all_clients[ws]
+                if ws in all_clients and all_clients[ws] in rooms:
+                    await rooms[all_clients[ws]].leave(ws)
+                    if rooms[all_clients[ws]].empty:
+                        del rooms[all_clients[ws]]
+                    del all_clients[ws]
             else:
                 if ws in all_clients and all_clients[ws] in rooms:
                     await rooms[all_clients[ws]].handleData(ws, data)
