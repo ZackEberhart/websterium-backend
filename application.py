@@ -484,7 +484,7 @@ async def feed(request, ws):
                         rooms[data["message"]["roomname"]] = Room(data["message"]["roomname"])
                     all_clients[ws] = data['message']["roomname"]
                     await rooms[data["message"]["roomname"]].join(ws, data["message"]["username"])
-            elif data['type'] == " ":
+            elif data['type'] == "leave":
                 await rooms[all_clients[ws]].leave(ws)
                 if rooms[all_clients[ws]].empty:
                     del rooms[all_clients[ws]]
